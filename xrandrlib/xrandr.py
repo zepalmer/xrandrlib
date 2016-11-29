@@ -37,9 +37,8 @@ _REGEX_MODE_HEADER = re.compile(
     r'  (?P<width>[0-9]+)x(?P<height>[0-9]+) '
     r'\(0x(?P<mode_id>[0-9a-f]+)\) '
     r'[0-9]+\.[0-9]+[GMK]?Hz'
-    r'(?P<flags>[^*+]+)'
-    r'(?P<current>\*current)?'
-    r' ?'
+    r' ?(?P<flags>(([+-][HV]Sync|Interlace) ?)+)'
+    r'(?P<current>\*current)? ?'
     r'(?P<preferred>\+preferred)?'
     )
 
@@ -70,6 +69,18 @@ class XrandrUpdatePolicy:
     """
     IMMEDIATE = 101
     DEFERRED = 102
+    every = [IMMEDIATE, DEFERRED]
+
+class XrandrRelativePosition:
+    """
+    Represents the relative positions that can be used in positioning an output.
+    """
+    LEFT_OF = "--left-of"
+    RIGHT_OF = "--right-of"
+    ABOVE = "--above"
+    BELOW = "--below"
+    SAME_AS = "--same-as"
+    every = [LEFT_OF, RIGHT_OF, ABOVE, BELOW, SAME_AS]
 
 class Xrandr(object):
     """
@@ -83,8 +94,7 @@ class Xrandr(object):
         Constructs a new Xrandr context.  Most programs should only need one
         object of this type.
         """
-        if update_policy not in [XrandrUpdatePolicy.IMMEDIATE,
-                                 XrandrUpdatePolicy.DEFERRED]:
+        if update_policy not in XrandrUpdatePolicy.every:
             raise ValueError("Invalid update policy")
         self.screen = None
         self._generation_id = 0
@@ -216,6 +226,7 @@ class Xrandr(object):
         size = (int(m.group("width")), int(m.group("height")))
         id = int(m.group("mode_id"), 16)
         flags = (m.group("flags") or "").strip().split()
+        print m.groupdict()
         preferred = m.group("preferred") is not None
         return Mode(self, output_name, size, id, preferred, flags)
 
@@ -321,6 +332,17 @@ class Output(XrandrModelObject):
             buf += "\n  {}".format(mode)
         return buf
 
+    def get_preferred_mode(self):
+        """
+        Returns the preferred mode for this output (or None if no such mode
+        exists).
+        """
+        for mode in self.modes:
+            print mode
+            if mode.preferred:
+                return mode
+        return None
+
     def set_mode(self, mode):
         self._master._perform_update(
             self._identifier, "mode",
@@ -330,6 +352,13 @@ class Output(XrandrModelObject):
         self._master._perform_update(
             self._identifier, "position",
             ["--output", self.name, "--pos", "{}x{}".format(x,y)])
+
+    def set_position_relative_to(self, relative_pos, output):
+        if relative_pos not in XrandrRelativePosition.every:
+            raise ValueError("Invalid relative position")
+        self._master._perform_update(
+            self._identifier, "position",
+            ["--output", self.name, relative_pos, output.name])
 
 class Mode(XrandrModelObject):
     """
