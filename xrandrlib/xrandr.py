@@ -63,19 +63,34 @@ class XrandrContextError(XrandrError):
     """
     pass
 
+class XrandrUpdatePolicy:
+    """
+    Represents the different update policies used when an Xrandr object is
+    changed.
+    """
+    IMMEDIATE = 101
+    DEFERRED = 102
+
 class Xrandr(object):
     """
     A class representing the current display state.
     """
 
-    def __init__(self, xrandr_binary=distutils.spawn.find_executable('xrandr')):
+    def __init__(self,
+                 xrandr_binary=distutils.spawn.find_executable('xrandr'),
+                 update_policy=XrandrUpdatePolicy.DEFERRED):
         """
         Constructs a new Xrandr context.  Most programs should only need one
         object of this type.
         """
+        if update_policy not in [XrandrUpdatePolicy.IMMEDIATE,
+                                 XrandrUpdatePolicy.DEFERRED]:
+            raise ValueError("Invalid update policy")
         self.screen = None
         self._generation_id = 0
         self._xrandr_binary = xrandr_binary
+        self._update_policy = update_policy
+        self._pending_updates = {}
         self.refresh()
 
     def _run_xrandr(self, args=[]):
@@ -98,10 +113,27 @@ class Xrandr(object):
         invalid.
         """
         self._generation_id += 1
+        self._pending_updates = {}
         lines = self._run_xrandr(args=['--verbose'])
         # FIXME: Naively assuming that all xrandr calls will discuss exactly
         # one screen...
         self.screen = self._parse_screen(lines)
+
+    def _perform_update(self, object_identifier, property_name, xrandr_args):
+        self._pending_updates[(object_identifier, property_name)] = xrandr_args
+        if self._update_policy == XrandrUpdatePolicy.IMMEDIATE:
+            self.commit_updates()
+
+    def commit_updates(self):
+        """
+        Applies any pending updates which have not yet been applied.
+        """
+        args = []
+        for v in self._pending_updates.itervalues():
+            args.extend(v)
+        self._run_xrandr(args)
+        self._pending_updates = {}
+        self.refresh()
 
     def _parse_screen(self, lines):
         screen_line = lines.next()
@@ -159,7 +191,7 @@ class Xrandr(object):
             if lines.peek().startswith("\t"):
                 lines.next()
             elif _REGEX_MODE_HEADER.match(lines.peek()):
-                modes.append(self._parse_mode(lines))
+                modes.append(self._parse_mode(name, lines))
             elif not lines.peek().startswith(" "):
                 break
             else:
@@ -170,7 +202,7 @@ class Xrandr(object):
         return Output(self, name, connected, size, position, current_mode_id,
                       modes)
 
-    def _parse_mode(self, lines):
+    def _parse_mode(self, output_name, lines):
         mode_header_line = lines.next()
         m = _REGEX_MODE_HEADER.match(mode_header_line)
         if not m:
@@ -185,7 +217,7 @@ class Xrandr(object):
         id = int(m.group("mode_id"), 16)
         flags = (m.group("flags") or "").strip().split()
         preferred = m.group("preferred") is not None
-        return Mode(self, size, id, preferred, flags)
+        return Mode(self, output_name, size, id, preferred, flags)
 
     def __str__(self):
         return "Xrandr object\n{}".format(self.screen)
@@ -198,13 +230,15 @@ class XrandrModelObject(object):
     objects as well as other features such as batch operations.
     """
 
-    def __init__(self, master):
+    def __init__(self, master, identifier):
         """
         Creates a new XrandrModelObject.  The Xrandr object creating this object
-        must be provided as the master.
+        must be provided as the master.  The provided identifier should be
+        unique to the master object for a particular generation ID.
         """
         self._master = master
         self._generation_id = self._master._generation_id
+        self._identifier = identifier
 
     def is_valid(self):
         """
@@ -230,7 +264,7 @@ class Screen(XrandrModelObject):
 
     def __init__(self, master, number, size_min, size_current, size_max,
                  outputs):
-        super(Screen, self).__init__(master)
+        super(Screen, self).__init__(master, "Screen({})".format(number))
         self.number = number
         self.size_min = size_min
         self.size_current = size_current
@@ -264,7 +298,7 @@ class Output(XrandrModelObject):
 
     def __init__(self, master, name, connected, size, position, current_mode_id,
                  modes):
-        super(Output, self).__init__(master)
+        super(Output, self).__init__(master, "Output({})".format(name))
         self.name = name
         self.connected = connected
         self.size = size
@@ -287,6 +321,16 @@ class Output(XrandrModelObject):
             buf += "\n  {}".format(mode)
         return buf
 
+    def set_mode(self, mode):
+        self._master._perform_update(
+            self._identifier, "mode",
+            ["--output", self.name, "--mode", str(hex(mode.id))])
+
+    def set_position(self, x, y):
+        self._master._perform_update(
+            self._identifier, "position",
+            ["--output", self.name, "--pos", "{}x{}".format(x,y)])
+
 class Mode(XrandrModelObject):
     """
     A class representing a display mode on an RandR output.  The Mode has the
@@ -298,8 +342,9 @@ class Mode(XrandrModelObject):
         refresh_rate: The refresh rate for this mode (in hertz).
     """
 
-    def __init__(self, master, size, id, preferred, flags):
-        super(Mode, self).__init__(master)
+    def __init__(self, master, output_name, size, id, preferred, flags):
+        super(Mode, self).__init__(master,
+                                   "Mode({},{})".format(output_name, hex(id)))
         self.size = size
         self.id = id
         self.preferred = preferred
