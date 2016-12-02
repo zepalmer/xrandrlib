@@ -226,9 +226,9 @@ class Xrandr(object):
         size = (int(m.group("width")), int(m.group("height")))
         id = int(m.group("mode_id"), 16)
         flags = (m.group("flags") or "").strip().split()
-        print m.groupdict()
         preferred = m.group("preferred") is not None
-        return Mode(self, output_name, size, id, preferred, flags)
+        current = m.group("current") is not None
+        return Mode(self, output_name, size, id, current, preferred, flags)
 
     def __str__(self):
         return "Xrandr object\n{}".format(self.screen)
@@ -303,6 +303,8 @@ class Output(XrandrModelObject):
         position: A tuple describing the location of the output in pixel
                   coordinates (X,Y).
         current_mode_id: The ID of the current screen mode.
+        current_mode: The Mode object representing the current screen mode, or
+                      None if no such mode can be determined.
         modes: A list of available modes (in the form of Mode objects) for this
                output.
     """
@@ -315,6 +317,9 @@ class Output(XrandrModelObject):
         self.size = size
         self.position = position
         self.current_mode_id = current_mode_id
+        current_modes = filter(lambda m: m.current, modes)
+        self.current_mode = \
+            None if len(current_modes) != 1 else current_modes[0]
         self.modes = modes
 
     def __str__(self):
@@ -338,12 +343,12 @@ class Output(XrandrModelObject):
         exists).
         """
         for mode in self.modes:
-            print mode
             if mode.preferred:
                 return mode
         return None
 
     def set_mode(self, mode):
+        self._target_mode = mode
         self._master._perform_update(
             self._identifier, "mode",
             ["--output", self.name, "--mode", str(hex(mode.id))])
@@ -360,23 +365,31 @@ class Output(XrandrModelObject):
             self._identifier, "position",
             ["--output", self.name, relative_pos, output.name])
 
+    def no_panning(self):
+        self._master._perform_update(
+            self._identifier, "panning",
+            ["--output", self.name, "--panning", "0x0"])
+
 class Mode(XrandrModelObject):
     """
     A class representing a display mode on an RandR output.  The Mode has the
     following attributes:
         size: A tuple describing the size of the mode (W,H).
         id: The ID of this mode.
+        current: Whether this mode is presently active.
         preferred: Whether this is the preferred mode for the output.
         flags: A list of the flags (e.g. "+HSync") set for this mode.
         refresh_rate: The refresh rate for this mode (in hertz).
     """
 
-    def __init__(self, master, output_name, size, id, preferred, flags):
+    def __init__(self, master, output_name, size, id, preferred, current,
+                 flags):
         super(Mode, self).__init__(master,
                                    "Mode({},{})".format(output_name, hex(id)))
         self.size = size
         self.id = id
         self.preferred = preferred
+        self.current = current
         self.flags = flags
 
     def __str__(self):
