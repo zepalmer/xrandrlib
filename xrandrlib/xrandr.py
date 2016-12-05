@@ -228,7 +228,7 @@ class Xrandr(object):
         flags = (m.group("flags") or "").strip().split()
         preferred = m.group("preferred") is not None
         current = m.group("current") is not None
-        return Mode(self, output_name, size, id, current, preferred, flags)
+        return Mode(self, output_name, size, id, preferred, current, flags)
 
     def __str__(self):
         return "Xrandr object\n{}".format(self.screen)
