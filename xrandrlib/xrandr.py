@@ -337,6 +337,24 @@ class Output(XrandrModelObject):
             buf += "\n  {}".format(mode)
         return buf
 
+    def auto(self):
+        """
+        Instructs XRandR to auto-configure this display.
+        """
+        self._target_mode = None
+        self._master._perform_update(
+            self._identifier, "mode",
+            ["--output", self.name, "--auto"])
+
+    def off(self):
+        """
+        Instructs XRandR to auto-configure this display.
+        """
+        self._target_mode = None
+        self._master._perform_update(
+            self._identifier, "mode",
+            ["--output", self.name, "--off"])
+
     def get_preferred_mode(self):
         """
         Returns the preferred mode for this output (or None if no such mode
